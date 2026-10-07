@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Own abstract geometric mark (circle skull + eye cutouts + jaw), not traced
+  from any existing logo — kept deliberately simple since adaptive icons
+  render as small as ~40dp on a home screen; fine detail disappears at that
+  size, so bold silhouette beats intricate linework here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- cranium -->
+    <path
+        android:fillColor="#E8D400"
+        android:pathData="M30,46 a24,24 0 1,1 48,0 a24,24 0 1,1 -48,0 z" />
+
+    <!-- jaw -->
+    <path
+        android:fillColor="#E8D400"
+        android:pathData="M39,58 h30 v12 a5,5 0 0,1 -5,5 h-20 a5,5 0 0,1 -5,-5 z" />
+
+    <!-- left eye socket (cut to background color) -->
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M37,45 a7,7 0 1,1 14,0 a7,7 0 1,1 -14,0 z" />
+
+    <!-- right eye socket -->
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M57,45 a7,7 0 1,1 14,0 a7,7 0 1,1 -14,0 z" />
+
+    <!-- nose -->
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M54,50 l-4,8 h8 z" />
+
+    <!-- teeth gaps -->
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M45,63 h2.5 v10 h-2.5 z" />
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M53,63 h2.5 v10 h-2.5 z" />
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M61,63 h2.5 v10 h-2.5 z" />
+</vector>

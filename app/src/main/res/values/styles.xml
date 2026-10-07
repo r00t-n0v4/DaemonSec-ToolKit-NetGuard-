@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher theme is plain dark Material so there's no white flash before
+         Compose takes over; Compose supplies the real Material3 scheme. -->
+    <style name="Theme.NetGuard" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/netguard_black</item>
+        <item name="android:statusBarColor">@color/netguard_black</item>
+        <item name="android:navigationBarColor">@color/netguard_black</item>
+    </style>
+</resources>

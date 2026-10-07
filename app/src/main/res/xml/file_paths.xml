@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Reports are written to getExternalFilesDir(null), i.e. the app's
+         external-files root; expose all of it so report files can be shared. -->
+    <external-files-path name="reports" path="." />
+</paths>
