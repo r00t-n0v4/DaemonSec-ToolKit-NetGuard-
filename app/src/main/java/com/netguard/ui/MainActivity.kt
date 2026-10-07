@@ -51,6 +51,8 @@ import com.netguard.ui.theme.NetGuardTheme
 import com.netguard.ui.theme.SignalYellow
 import com.netguard.ui.theme.TerminalGreen
 import com.netguard.vpn.NetGuardVpnService
+import com.netguard.vpn.VpnState
+import com.netguard.vpn.VpnState as VpnStateFlow
 import com.netguard.web.WebReconModule
 import com.netguard.wifi.WifiAuditor
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +104,24 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* each module fails soft without permission; nothing to react to here */ }
 
+    private var sessionActiveOverride = false
+
+    /** VPN running state exposed to Compose (service updates it; UI observes). */
+    private val vpnStateFlow = VpnState.active
+
+    /**
+     * On relaunch while the tunnel survived (START_STICKY): re-attach truthfully.
+     * If the tunnel is running but we don't hold a session id, adopt an
+     * "orphaned" marker so the banner shows the real state and Disconnect
+     * works — instead of pretending nothing is running.
+     */
+    private fun reconcileVpnState() {
+        if (VpnState.active.value && activeSessionId == null) {
+            activeSessionId = "orphaned-" + UUID.randomUUID()
+            sessionActiveOverride = true
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         trackerScanner = TrackerScanner(this)
@@ -117,6 +137,7 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("netguard-config", Context.MODE_PRIVATE)
         OsintModule.hibpKey = prefs.getString("hibp_key", null)
         OsintModule.githubToken = prefs.getString("github_token", null)
+        reconcileVpnState()
 
         requestRuntimePermissions()
 
@@ -126,11 +147,14 @@ class MainActivity : ComponentActivity() {
                     NetGuardScreen(
                         database = app.database,
                         onStartSession = { scope, sessionId -> startSession(scope, sessionId) },
-                        onStopSession = ::stopSession,
+                        onStopSession = ::disconnectVpn,
                         onScanHostsArp = ::runArpScan,
                         onScanHostsActive = ::runActiveSweep,
                         onScanWifi = ::runFullWifiSweep,
                         onBleScan = ::runBleScan,
+                        vpnActive = vpnStateFlow,
+                        onVpnDisconnect = ::disconnectVpn,
+                        onVpnEnable = { startVpnService() },
                         onWebRecon = ::runWebRecon,
                         onOsint = ::runOsint,
                         onGattProbe = ::runGattProbe,
@@ -482,16 +506,34 @@ class MainActivity : ComponentActivity() {
         val sessionId = activeSessionId ?: return
         val intent = Intent(this, NetGuardVpnService::class.java)
             .putExtra(NetGuardVpnService.EXTRA_SESSION_ID, sessionId)
-        startService(intent)
+        // startForegroundService so the call is legal even when the app is in
+        // the background (notification tap, etc.); the service already calls
+        // startForeground promptly in onStartCommand.
+        androidx.core.content.ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun stopSession() {
-        stopService(Intent(this, NetGuardVpnService::class.java))
+    /**
+     * In-app tunnel shutdown. Delivers the same ACTION_STOP the notification
+     * Stop uses, but via plain startService(): the app is always foreground
+     * when the user taps, so background-start limits don't apply, and plain
+     * starts carry NO startForeground-within-5s obligation — critical,
+     * because an ACTION_STOP start never calls startForeground (it's tearing
+     * the service down) and using startForegroundService for it crashes with
+     * ForegroundServiceDidNotStartInTimeException (caught live on-device).
+     * The service handler closes the tun fd first, so teardown is <1s.
+     */
+    private fun disconnectVpn() {
+        startService(
+            Intent(this, NetGuardVpnService::class.java)
+                .setAction(NetGuardVpnService.ACTION_STOP)
+        )
         trackerScanner.stopScanning()
-        val sessionId = activeSessionId ?: return
-        val app = application as NetGuardApp
-        app.appScope.launchSafely {
-            app.database.sessionDao().markEnded(sessionId, System.currentTimeMillis())
+        val id = activeSessionId
+        if (id != null && !id.startsWith("orphaned-")) {
+            val app = application as NetGuardApp
+            app.appScope.launchSafely {
+                app.database.sessionDao().markEnded(id, System.currentTimeMillis())
+            }
         }
         activeSessionId = null
     }
@@ -520,6 +562,9 @@ fun NetGuardScreen(
     onScanHostsActive: ((String) -> Unit) -> Unit,
     onScanWifi: ((String) -> Unit) -> Unit,
     onBleScan: ((String) -> Unit) -> Unit,
+    vpnActive: kotlinx.coroutines.flow.StateFlow<Boolean>,
+    onVpnDisconnect: () -> Unit,
+    onVpnEnable: () -> Unit,
     onWebRecon: (String, String?, (String) -> Unit) -> Unit,
     onOsint: (String, String, String, (String) -> Unit) -> Unit,
     onGattProbe: (String, (String) -> Unit) -> Unit,
@@ -587,6 +632,9 @@ fun NetGuardScreen(
                     onScanHostsActive = onScanHostsActive,
                     onScanWifi = onScanWifi,
                     onBleScan = onBleScan,
+                    vpnActive = vpnActive,
+                    onVpnDisconnect = onVpnDisconnect,
+                    onVpnEnable = onVpnEnable,
                     onWebRecon = onWebRecon,
                     onOsint = onOsint
                 )
@@ -636,6 +684,9 @@ private fun MonitorTab(
     onScanHostsActive: ((String) -> Unit) -> Unit,
     onScanWifi: ((String) -> Unit) -> Unit,
     onBleScan: ((String) -> Unit) -> Unit,
+    vpnActive: kotlinx.coroutines.flow.StateFlow<Boolean>,
+    onVpnDisconnect: () -> Unit,
+    onVpnEnable: () -> Unit,
     onWebRecon: (String, String?, (String) -> Unit) -> Unit,
     onOsint: (String, String, String, (String) -> Unit) -> Unit
 ) {
@@ -643,10 +694,13 @@ private fun MonitorTab(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var showWebDialog by remember { mutableStateOf(false) }
     var showOsintDialog by remember { mutableStateOf(false) }
+    val isVpnActive by vpnActive.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (sessionActive) {
-            Row(
+        // ---- VPN tunnel banner: shows REAL service state, offers direct
+        // disconnect/enable without leaving the app ----
+        when {
+            isVpnActive -> Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -659,13 +713,49 @@ private fun MonitorTab(
                         .background(SignalYellow, shape = androidx.compose.foundation.shape.CircleShape)
                 )
                 Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "VPN MONITORING — ${if (sessionActive) "SESSION ACTIVE" else "TUNNEL ONLY"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SignalYellow,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        if (sessionActive) "Traffic observation + scans running"
+                        else "Tunnel running from a previous session — restart a session to unlock scans",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onVpnDisconnect) {
+                    Text("DISCONNECT", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            sessionActive -> Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant, shape = androidx.compose.foundation.shape.CircleShape)
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    "MONITORING ACTIVE",
+                    "SESSION ACTIVE — VPN PERMISSION NEEDED",
                     style = MaterialTheme.typography.bodySmall,
-                    color = SignalYellow,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     letterSpacing = 1.sp
                 )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onVpnEnable) {
+                    Text("ENABLE VPN", color = SignalYellow, style = MaterialTheme.typography.labelLarge)
+                }
             }
+            else -> {}
         }
 
         // Pinned completion strip — sits directly under MONITORING ACTIVE so

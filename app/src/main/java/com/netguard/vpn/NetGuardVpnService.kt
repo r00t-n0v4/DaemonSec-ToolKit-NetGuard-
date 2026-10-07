@@ -47,6 +47,9 @@ class NetGuardVpnService : VpnService() {
 
     companion object {
         const val EXTRA_SESSION_ID = "sessionId"
+        /** Notification "Stop" action: delivered to onStartCommand as an intent. */
+        const val ACTION_STOP = "com.netguard.vpn.STOP"
+        private const val TAG = "NetGuardVpn"
 
         private const val VPN_MTU = 1280
         private const val TUN_ADDRESS = "10.111.222.3"
@@ -92,27 +95,53 @@ class NetGuardVpnService : VpnService() {
     private val seenTcpFlows: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        android.util.Log.d(TAG, "onStartCommand action=${intent?.action}")
+        // Notification "Stop" button (and any other stop signal) lands here.
+        if (intent?.action == ACTION_STOP) {
+            running = false
+            try { selector?.wakeup() } catch (_: Exception) {}
+            // Close the TUN FIRST: unblocks the reader (blocked in Os.read) and
+            // tears the VPN network down deterministically, instead of hoping
+            // onDestroy's joins+close complete on every OEM.
+            try { tunInterface?.close() } catch (_: Exception) {}
+            tunInterface = null
+            stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            android.util.Log.d(TAG, "ACTION_STOP: tun closed, service stopping")
+            return START_NOT_STICKY
+        }
         if (intent != null) startIntent = intent
         running = true
         startForegroundWithNotification()
         if (tunInterface == null && establishTun() == null) {
             // establish() returns null if VpnService.prepare() consent is missing.
+            android.util.Log.d(TAG, "establish() returned null — consent missing?")
+            VpnState.active.value = false
             stopSelf()
             return START_NOT_STICKY
         }
+        VpnState.active.value = true
+        android.util.Log.d(TAG, "tun established, starting threads")
         if (sessionThread == null) startThreads()
-        return START_STICKY
+        // START_NOT_STICKY: a killed service comes back through the app's
+        // explicit VPN-consent flow (banner shows "ENABLE VPN"), not by
+        // silently resurrecting a tunnel with no session behind it.
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        android.util.Log.d(TAG, "onDestroy: tearing down")
         running = false
+        VpnState.active.value = false
         try { selector?.wakeup() } catch (_: Exception) {}
-        sessionThread?.join(2000)
-        relayThread?.join(2000)
+        sessionThread?.join(1500)
+        relayThread?.join(1500)
+        android.util.Log.d(TAG, "onDestroy: threads joined")
         udpFlows.values.forEach { try { it.channel.close() } catch (_: Exception) {} }
         udpFlows.clear()
-        tunInterface?.close()
+        try { tunInterface?.close() } catch (_: Exception) {}
         tunInterface = null
+        android.util.Log.d(TAG, "onDestroy: tun fd closed")
         super.onDestroy()
     }
 
@@ -140,10 +169,28 @@ class NetGuardVpnService : VpnService() {
                 android.app.NotificationManager.IMPORTANCE_LOW
             )
         )
+        // Tap notification → open the app (so Disconnect/Enable is one tap away)
+        val openApp = android.app.PendingIntent.getActivity(
+            this, 0,
+            android.content.Intent(this, com.netguard.ui.MainActivity::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        // "Stop monitoring" action → onStartCommand(ACTION_STOP) → service dies,
+        // session cleanup happens in the app via VpnState observation.
+        // foregroundServiceType is required on API 34+ for FGS PendingIntent
+        // starts; the manifest declares specialUse for this service.
+        val stopIntent = android.content.Intent(this, NetGuardVpnService::class.java)
+            .setAction(ACTION_STOP)
+        val stopAction = android.app.PendingIntent.getService(
+            this, 1, stopIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notification = android.app.Notification.Builder(this, channelId)
             .setContentTitle("NetGuard monitoring active")
             .setContentText("Traffic observation session running")
             .setSmallIcon(android.R.drawable.ic_secure)
+            .setContentIntent(openApp)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop monitoring", stopAction)
             .setOngoing(true)
             .build()
         if (android.os.Build.VERSION.SDK_INT >= 34) {
