@@ -40,9 +40,17 @@ import java.util.concurrent.ConcurrentHashMap
 class NetGuardVpnService : VpnService() {
     init {
         // Expose protect() to module code through the app-wide singleton, so
-        // recon/BLE sockets bypass the VPN while a session is active.
-        SocketProtector.protectSocketImpl = { socket -> protect(socket) }
-        SocketProtector.protectDatagramImpl = { socket -> protect(socket) }
+        // recon/BLE sockets bypass the VPN while a session is active. protect()
+        // returns false when it fails — log that instead of failing silently
+        // (a silent failure routes probe traffic INTO the tun and blackholes it).
+        SocketProtector.protectSocketImpl = { socket ->
+            val ok = protect(socket)
+            if (!ok) android.util.Log.w("NetGuardVpn", "protect(socket) returned FALSE — bypass failed")
+        }
+        SocketProtector.protectDatagramImpl = { socket ->
+            val ok = protect(socket)
+            if (!ok) android.util.Log.w("NetGuardVpn", "protect(datagram) returned FALSE — bypass failed")
+        }
     }
 
     companion object {
@@ -153,6 +161,15 @@ class NetGuardVpnService : VpnService() {
             .addAddress(TUN_ADDRESS, 32)
             .addDnsServer(TUN_DNS)
             .addRoute("0.0.0.0", 0)
+        // Exclude our OWN app from the tunnel: recon/OSINT probes then route
+        // natively over wlan0 — no protect() needed, and on ROMs where
+        // protect() silently fails (observed on OneUI with this builder), the
+        // sweep still works instead of blackholing into the observe-only TUN.
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (_: Exception) {
+            android.util.Log.w(TAG, "addDisallowedApplication(self) failed — relying on protect()")
+        }
         return try {
             builder.establish()?.also { tunInterface = it }
         } catch (_: Exception) {

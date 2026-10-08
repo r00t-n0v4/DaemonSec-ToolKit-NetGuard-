@@ -56,6 +56,45 @@ object ProtectedHttp {
     private val throttleMutex = Mutex()
     @Volatile private var lastRequestAt = 0L
 
+    /** Plain client on the DEFAULT network — fallback when the WiFi-pinned
+     *  path has no WAN (some routers NAT only for validated/default clients,
+     *  observed on-device: LAN TCP fine over wlan0, WAN TCP dead over wlan0,
+     *  WAN alive over cellular). */
+    private val plainClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(java.time.Duration.ofSeconds(15))
+            .readTimeout(java.time.Duration.ofSeconds(25))
+            .build()
+    }
+
+    /**
+     * GET with automatic fallback: pinned-WiFi socket first, then a plain
+     * default-network client. Returns (httpCode, body) or null.
+     */
+    suspend fun getWithFallback(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        minIntervalMs: Long = 120
+    ): Pair<Int, String>? {
+        // WAN lookups go on the DEFAULT network directly: Network.bindSocket()
+        // to the WiFi agent wedges forever on this OneUI build while our own
+        // disallowed-UID tunnel is up (netd per-network socket path), and the
+        // default network (whether wifi-validated or cellular) is exactly
+        // where WAN traffic belongs anyway. LAN probes use SocketProtector's
+        // pinned path — different requirement, different call site.
+        return withContext(Dispatchers.IO) {
+            throttle(minIntervalMs)
+            runCatching {
+                val builder = Request.Builder().url(url).get()
+                headers.forEach { (k, v) -> builder.header(k, v) }
+                plainClient.newCall(builder.build()).execute().use { resp ->
+                    resp.code to (resp.body?.string() ?: "")
+                }
+            }.onFailure { android.util.Log.w("NetGuardHTTP", "default-net fetch failed: ${it.javaClass.simpleName}: ${it.message?.take(90)}") }
+            .getOrNull()
+        }
+    }
+
     suspend fun throttle(minIntervalMs: Long = 120) {
         throttleMutex.withLock {
             val now = System.currentTimeMillis()

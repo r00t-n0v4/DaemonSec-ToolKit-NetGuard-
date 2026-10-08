@@ -252,7 +252,8 @@ class ReportExporter(
                 "WIFI_AP" to "Wireless airspace (all APs seen)",
                 "WEB" to "Web recon / testing",
                 "OSINT" to "OSINT hits",
-                "GATT" to "BLE GATT profiles"
+                "GATT" to "BLE GATT profiles",
+                "PUBLIC_IP" to "Public IP"
             )
             typeTitles.forEach { (type, title) ->
                 val rows = grouped[type].orEmpty()
@@ -286,11 +287,22 @@ class ReportExporter(
     /** Compact payload for report bullets: try a decoded summary, else trimmed JSON. */
     private fun short(payloadJson: String): String {
         decodeHost(payloadJson)?.let { h ->
-            val bits = listOfNotNull(h.ip, h.hostname, ch(h.vendor), ch(h.mac))
-            return bits.joinToString(" · ")
+            val bits = listOfNotNull(ch(h.hostname), ch(h.vendor), ch(h.mac))
+            val os = h.osGuess?.let { " — OS: $it" } ?: ""
+            val label = when (h.category) {
+                "This Phone" -> "THIS PHONE"
+                "Gateway/Router" -> "GATEWAY"
+                else -> null
+            }
+            return ((label?.let { "$it (${h.ip})" } ?: h.ip) + if (bits.isEmpty()) "" else " · " + bits.joinToString(" · ")) + os
         }
         decodeOpenPort(payloadJson)?.let { p ->
-            return "${p.ip}:${p.port} ${p.service ?: ""}".trim()
+            val svc = p.product ?: p.service ?: ""
+            return "${p.ip}:${p.port} ${svc}${if (p.flagged) "  [RISKY]" else ""}".trim()
+        }
+        decodePublicIp(payloadJson)?.let { pi ->
+            return "PUBLIC IP ${pi.ip}" + listOfNotNull(pi.org, pi.country,
+                pi.asn?.let { "AS$it" }).joinToString(" · ", prefix = " — ")
         }
         decodeWifiAnomaly(payloadJson)?.let { w ->
             return listOfNotNull(ch(w.ssid), ch(w.bssid), w.detail).joinToString(" · ")
@@ -320,6 +332,10 @@ class ReportExporter(
 
     private fun decodeWifiAp(payloadJson: String): Finding.WifiAp? = try {
         json.decodeFromString(Finding.WifiAp.serializer(), payloadJson)
+    } catch (_: Exception) { null }
+
+    private fun decodePublicIp(payloadJson: String): Finding.PublicIp? = try {
+        json.decodeFromString(Finding.PublicIp.serializer(), payloadJson)
     } catch (_: Exception) { null }
 
     private fun decodeWeb(payloadJson: String): Finding.Web? = try {

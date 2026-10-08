@@ -39,8 +39,8 @@ class BleDiscovery(private val context: Context) {
         /** Display order + red styles come from the shared classifier. */
         val CATEGORY_ORDER get() = DeviceClassifier.CATEGORY_ORDER
 
-        private const val COMPANY_APPLE = 0x004C
-        private const val APPLE_FIND_MY_TYPE_BYTE = 0x12
+        internal const val COMPANY_APPLE = 0x004C
+        internal const val APPLE_FIND_MY_TYPE_BYTE = 0x12
 
         fun trackerTypeFor(name: String?): String? {
             val n = name?.lowercase() ?: ""

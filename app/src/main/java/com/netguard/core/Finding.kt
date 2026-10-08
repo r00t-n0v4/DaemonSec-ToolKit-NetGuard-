@@ -27,6 +27,8 @@ sealed class Finding {
         val vendor: String? = null,
         val mac: String? = null,
         val category: String? = null,
+        /** Heuristic OS guess, e.g. "likely Windows (RDP open, SMB)" — never gospel. */
+        val osGuess: String? = null,
         override val flagged: Boolean = false,
         override val source: String = "recon"
     ) : Finding()
@@ -37,6 +39,7 @@ sealed class Finding {
         val ip: String,
         val port: Int,
         val service: String? = null,
+        val product: String? = null,
         override val flagged: Boolean = false,
         override val source: String = "recon"
     ) : Finding()
@@ -136,6 +139,18 @@ sealed class Finding {
         override val source: String = "osint"
     ) : Finding()
 
+    /** This network's edge/public IP (fetched + RDAP-enriched during sweeps). */
+    @Serializable
+    data class PublicIp(
+        override val sessionId: String,
+        val ip: String,
+        val org: String? = null,
+        val country: String? = null,
+        val asn: Int? = null,
+        override val flagged: Boolean = false,
+        override val source: String = "recon"
+    ) : Finding()
+
     /** GATT profile of one BLE device (services + characteristics). */
     @Serializable
     data class GattDevice(
@@ -175,6 +190,7 @@ fun findingTypeOf(finding: Finding): String = when (finding) {
     is Finding.Web -> "WEB"
     is Finding.OsintHit -> "OSINT"
     is Finding.GattDevice -> "GATT"
+    is Finding.PublicIp -> "PUBLIC_IP"
 }
 
 /**

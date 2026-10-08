@@ -42,6 +42,16 @@ interface FindingDao {
     @Query("SELECT * FROM findings WHERE sessionId = :sessionId ORDER BY timestamp DESC, id DESC")
     fun observeForSession(sessionId: String): Flow<List<FindingEntity>>
 
+    /**
+     * UI-facing window over the newest findings. The unbounded query requeried
+     * and re-diffed the ENTIRE session on every single insert (WiFi sweeps =
+     * 100+ invalidation cycles back to back) and starved the main thread —
+     * the "Findings tab goes dead during scan bursts" bug. 300 rows is the
+     * live view; reports still read the full session via getForSession().
+     */
+    @Query("SELECT * FROM findings WHERE sessionId = :sessionId ORDER BY timestamp DESC, id DESC LIMIT :limit")
+    fun observeForSessionLimited(sessionId: String, limit: Int): Flow<List<FindingEntity>>
+
     @Query("SELECT * FROM findings WHERE sessionId = :sessionId ORDER BY timestamp ASC, id ASC")
     suspend fun getForSession(sessionId: String): List<FindingEntity>
 

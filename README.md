@@ -104,6 +104,44 @@ adb install -r app-debug.apk        # or sideload the APK
 
 OSINT extras live in **Settings** (gear icon): your HIBP API key and a GitHub token unlock breach lookup and code-search dorking. Keys stay in app-private prefs and never appear in exports.
 
+## Changelog (recent)
+
+**0.9.4 — Findings type-filter slider**
+- The type-filter chips (All/WEB/WIFI_AP/…/OSINT) overflowed their fixed Row and the last chips (OSINT) rendered off-screen — unreachable when several sensors ran in one session. The row is now a horizontal slider (swipe to reach every type). Verified: swipe left → OSINT chip reachable → filters to its record.
+
+**0.9.3 — OSINT record stacking + anomaly section**
+- **OSINT results stack per identifier**: a username-matrix run now lands as ONE `🛰 <username>` record — all 12 platform results (GitHub/Reddit/X/Keybase/...) expand from it with per-row OSINT badges and ⚠ flags on the record when any platform hit exists. Verified live: `huangnova (12 results)`, Reddit/X/SoundCloud/Medium/Telegram/Instagram flagged red.
+- **WiFi anomalies get their own collapsible section** (`WIFI ANOMALIES (n)`, after WI-FI): mixed in, the band-wide congestion rows read as broken AP entries (bare "wifi" headline crushed under the badge). Anomaly rows now headline the kind ("Congestion") with the full detail line beneath.
+
+**0.9.2 — Findings restructure + true dead-spot fix**
+- **Recon records group by TARGET properly**: DNS-record targets ("example.com TXT"), dir-bust paths, reflection URLs, vhost probes and header rows all normalize to the base host, so one `example.com` recon = one record — expanding it shows every TXT / A / AAAA / CAA / SOA / NS / MX row in one place (verified: 13 rows).
+- **WiFi/BLE/LAN/Info sections in Findings collapse too** — the feed is now headers-first (🛰 records + BLUETOOTH (n) / WI-FI (n) / LAN (n)), each folded until tapped: a full session stays at ~6 rows on screen instead of 65+.
+- **Dead-spot #2 fixed:** even with the hardened writer, the tab re-queried and re-diffed the ENTIRE session (unbounded `observeForSession`) on every single insert — during a BLE burst (hundreds of rows/s) the main thread starved and the tab froze until scans ended. The UI now observes a newest-300 window; reports keep reading the full session from the DAO.
+- Removed the dead "Run" button beside the Target-domain field in the web-recon sheet.
+
+**0.9.1 — intel records, source badges, dead-spot fix**
+- **Recon results are grouped per target in the Findings tab**: running OSINT/web recon on `example.com` stores every result (DNS records, RDAP, subdomains, headers, hits…) under ONE "🛰 example.com" record row — tap it to open everything from that target in a single place, folded away from the device log when closed. Public-IP rows join the intel set.
+- **Findings rows now carry a source badge**: `Bluetooth` / `WiFi` / `LAN scan` / `OSINT` / `Web recon` / `Traffic` / `Network info` — glanceable origin like the Nearby tab's grouping, and the bare `[TYPE]` prefix line is gone.
+- **Fixed: the "dead spot" after running BLE → OSINT → WiFi in one session.** Root cause: the single DB-writer coroutine died permanently on the first failed insert (any transient SQLite lock/error cancelled `collect{}` and every later finding was silently dropped — Findings just stopped updating). The writer now retries each row 3× with backoff and drops a bad row instead of dying; `launchSafely` blocks log crashes instead of failing silently.
+
+**0.9.0 — Fox Hunt tab + Intel dropdown**
+- **🦊 Fox Hunt is its own tab**: enter the target's MAC (copy it from a Findings BLE row — long-press), press Hunt, and the tab locks onto that device — live RSSI, a warmer/colder range estimate, best-signal-so-far ("walk back to where that was"), and a packet counter. The BLE scan is platform-filtered to the target MAC (power-efficient); press Stop to end. Verified live on a Flipper: `-60 dBm — WARM ~1.1m`, 24 packets.
+- **Findings tab: OSINT/Web results collapse into one "🛰 INTEL" dropdown group** (OSINT + WEB + ATTACKER_LOOKUP), folded by default, so DNS-record spam no longer buries device findings.
+- Six tabs now: Monitor · Nearby · Findings · 🦊 Fox Hunt · Reports · GATT.
+
+**0.8.0 — usability pass (dropdown tools, fox hunt, copy)**
+- **OSINT and Web recon are now expandable dropdown sheets** on the Monitor deck, not dialogs: tap the row and every tool appears inline with its own input + Run button — no more multi-step popups. Each tool runs independently (username matrix, HIBP breaches, IP/domain RDAP, Wayback, GitHub dorks / subdomains, DNS, headers, dir busting, reflection triage); the OSINT/IP path was verified live on-device (1.1.1.1 → APNIC-LABS, AS13335).
+- **🦊 BLE Fox hunt** — proximity hunting for trackers and alert-class BLE (AirTag/Find My, Flipper OUI...): 30 s low-latency scan, every observation logged, warmer/colder readout with a log-distance range estimate. Verified live: Flipper `Cr0w` tracked at ~1.7 m.
+- **Copy MAC/BSSID/IP from Near (Nearby) or Findings**: rows show a copy button (tap) and the whole row copies on long-press, with a toast. Verified live: Flipper MAC copied and confirmed via system clipboard chip.
+- Renames: "Active sweep" → **Network scan**; "Full WiFi sweep" → **WiFi scan** (deck, quick buttons, statuses, auto-opened scope label).
+
+**0.7.1 — probes connect for real**
+- Scan sockets are pinned to the WiFi `Network` (`Network.bindSocket`): with WiFi + LTE up simultaneously, default-network routing was silently sending every LAN-bound probe into the cellular agent where RFC1918 space is unroutable — sweeps "succeeded" with zero contact. Now TCP RSTs are received from real devices (60+ hosts on the test LAN) and counted as proof of life.
+- Hosts that answer but keep all probed ports closed now appear on the map (previously hidden — which also silently corrupted AP-isolation detection).
+- Public-IP/OSINT lookups run on a dedicated dispatcher (no longer starved behind the 5,800-job probe queue) with a default-network fallback; when the router refuses new forwarded WAN TCP, the status strip says so instead of a bare "unavailable".
+
+**0.7.0 — the real network map**
+
 ## VPN module status (the honest version)
 
 - **UDP: forwarded for real.** Every flow is NAT'd through a `protect()`'d `DatagramChannel`; replies are synthesized back into the TUN as hand-built IPv4/UDP packets with correct IP-header checksums (the kernel silently drops wrong ones). DNS aimed at the internal resolver is redirected upstream — QUIC/HTTP3 and DNS keep working during a session.

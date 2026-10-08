@@ -15,10 +15,17 @@ object SocketProtector {
     @Volatile var protectDatagramImpl: ((DatagramSocket) -> Unit)? = null
 
     fun protect(socket: Socket) {
+        // 1) Pin to the WiFi network FIRST (bind-before-connect): with WiFi +
+        //    cellular up, default-network resolution can send LAN-bound sockets
+        //    into the cellular agent where RFC1918 space is unroutable — the
+        //    reason port probes silently blackholed on-device.
+        WifiPinner.bindTcp(socket)
+        // 2) Then mark to bypass our own VPN tunnel when a session is active.
         try { protectSocketImpl?.invoke(socket) } catch (_: Exception) {}
     }
 
     fun protectDatagram(socket: DatagramSocket) {
+        WifiPinner.bindUdp(socket)
         try { protectDatagramImpl?.invoke(socket) } catch (_: Exception) {}
     }
 }

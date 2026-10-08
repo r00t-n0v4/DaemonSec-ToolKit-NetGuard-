@@ -19,10 +19,13 @@ object DeviceClassifier {
     const val CAT_COMPUTER = "Phones/Computers"
     const val CAT_HID = "HID/Input/Remotes"
     const val CAT_HIDDEN = "Hidden Networks"
+    const val CAT_THISPHONE = "This Phone"
+    const val CAT_GATEWAY = "Gateway/Router"
     const val CAT_OTHER = "Other"
 
     /** Display order for grouped views. */
     val CATEGORY_ORDER = listOf(
+        CAT_THISPHONE, CAT_GATEWAY,
         CAT_FLIPPER, CAT_TRACKER, CAT_GLASSES, CAT_AUDIO, CAT_TV,
         CAT_WEARABLE, CAT_HID, CAT_VEHICLE, CAT_DEVBOARD, CAT_COMPUTER,
         CAT_HIDDEN, CAT_OTHER
@@ -104,6 +107,59 @@ object DeviceClassifier {
     /** Vendor-string classifier for ARP/scan results ("Raspberry Pi Trading"). */
     fun classifyVendor(vendor: String?): String? =
         vendor?.let { v -> NAME_RULES.firstOrNull { it.first.containsMatchIn(v) }?.second }
+
+    /**
+     * OS inference for a LAN host from signals an unrooted phone can see:
+     * open-port pattern, grabbed service banners (SSH/HTTP/FTP announce
+     * product+OS), OUI vendor, and hostname. Output is a HINT for reports
+     * ("likely Windows (RDP+SMB)") — TCP-stack fingerprinting beyond this
+     * needs raw sockets, which non-rooted Android forbids.
+     */
+    fun guessOs(
+        openPorts: Collection<Int>,
+        banners: Map<Int, String> = emptyMap(),
+        vendor: String? = null,
+        hostname: String? = null
+    ): String? {
+        val h = hostname?.lowercase() ?: ""
+        val v = vendor?.lowercase() ?: ""
+        val texts = (banners.values.joinToString(" ") + " " + h).lowercase()
+
+        // banner-direct OS strings beat everything
+        when {
+            texts.contains("ubuntu") -> return "Linux (Ubuntu)"
+            texts.contains("debian") -> return "Linux (Debian)"
+            texts.contains("freebsd") -> return "FreeBSD"
+            texts.contains("busybox") -> return "Linux (embedded/BusyBox)"
+            texts.contains("mikrotik") || texts.contains("routeros") -> return "RouterOS (MikroTik)"
+            texts.contains("windows") || texts.contains("iis/") -> return "Windows"
+        }
+
+        // port-pattern inferences
+        val portOs = when {
+            3389 in openPorts -> "Windows (RDP open)"
+            445 in openPorts && 139 in openPorts -> "Windows (SMB/NetBIOS)"
+            445 in openPorts -> "Windows or Samba (SMB)"
+            548 in openPorts -> "macOS (AFP open)"
+            5555 in openPorts -> "Android (ADB exposed!)"
+            9100 in openPorts -> "printer (JetDirect)"
+            else -> null
+        }
+        if (portOs != null) return portOs
+
+        // vendor / hostname hints
+        return when {
+            v.contains("apple") -> "macOS/iOS device (Apple)"
+            v.contains("raspberry") -> "Linux (Raspberry Pi)"
+            v.contains("google") -> "Android/Google device"
+            v.contains("synology") || v.contains("qnap") -> "Linux NAS"
+            h.contains("iphone") || h.contains("ipad") || h.contains("mbp") || h.contains("macbook") -> "macOS/iOS device"
+            h.contains("android") || h.contains("pixel") || h.contains("galaxy") -> "Android"
+            22 in openPorts -> "Linux/Unix (SSH)"
+            80 in openPorts || 443 in openPorts -> "runs a web service"
+            else -> null
+        }
+    }
 
     /** True if the category should render in the red/alerted style. */
     fun isAlertCategory(category: String): Boolean =

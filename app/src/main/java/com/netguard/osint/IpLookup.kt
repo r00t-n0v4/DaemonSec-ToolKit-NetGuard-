@@ -3,6 +3,7 @@ package com.netguard.osint
 import com.netguard.core.Finding
 import com.netguard.core.FindingBus
 import com.netguard.core.SocketProtector
+import com.netguard.core.WifiPinner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -108,12 +109,17 @@ object IpLookup {
     }
 
     /**
-     * Plain HttpURLConnection. NOTE: during an active VPN session TCP is not
-     * forwarded, so these lookups may fail until Firestack lands — emit
-     * failures as nil results rather than crashing.
+     * Plain HttpURLConnection bound to the WiFi network when one is tracked
+     * (Network.openConnection pins DNS+routing to that network; with WiFi +
+     * cellular up, the default-network choice can send these into the
+     * cellular agent where they die). NOTE: during an active VPN session TCP
+     * is not forwarded, so these lookups may fail until Firestack lands —
+     * emit failures as nil results rather than crashing.
      */
     private fun protectedConnection(url: String): HttpURLConnection {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val urlObj = URL(url)
+        val conn = WifiPinner.openHttpConnection(urlObj)
+            ?: (urlObj.openConnection() as HttpURLConnection)
         conn.connectTimeout = 8000
         conn.readTimeout = 8000
         conn.setRequestProperty("Accept", "application/rdap+json, application/json")
