@@ -1,6 +1,8 @@
 # NetGuard
 
-**A pocket-sized network security toolkit — VPN-based traffic observation, WiFi/BLE airspace awareness, and bug-bounty recon in one offline-first Android app.**
+**A pocket-sized network security toolkit — VPN-based traffic observation, WiFi/BLE airspace awareness, proximity fox-hunting, and bug-bounty recon in one offline-first Android app.**
+
+`v0.9.4` · 6 tabs · pure Android (no root, no Termux) · exports MD/JSON/PDF on-device
 
 ## What it does
 
@@ -9,13 +11,15 @@ NetGuard is a **self-contained, Termux-free** pentest companion. Every scan writ
 | Module | What you get | Root needed |
 |---|---|---|
 | **Network Recon** | ARP-table host discovery, active TCP sweep of your whole /24, mDNS + SSDP passive listen, OUI vendor lookup | No |
-| **WiFi Sweep** | Every visible AP recorded (SSID/BSSID/ch/security/RSSI), channel-congestion advisor, evil-twin detection, security-downgrade detection, venue-SSID rogue-AP alerts — all grouped in one view | No |
+| **WiFi Scan** | Every visible AP recorded (SSID/BSSID/ch/security/RSSI), channel-congestion advisor, evil-twin detection, security-downgrade detection, venue-SSID rogue-AP alerts — all grouped in one view | No |
 | **Traffic Observation** | `VpnService` TUN observer: real **UDP forwarding** (DNS/QUIC/HTTP3 pass through), DNS query log, **TLS SNI extraction** (what domains, without decryption), known-tracker flagging, cleartext-port flagging | No |
 | **BLE Discovery** | Nearby-device scan **classified into groups** (below), AirTag/Tile/SmartTag/Chipolo tracker detection incl. Apple Find My beacons, movement heuristic | No |
+| **🦊 Fox Hunt** | **Its own tab**: enter a tracker's MAC (copy it from any BLE row), Hunt, and NetGuard locks onto that device — live RSSI, warmer/colder range estimate, "walk back to where that was" best-signal guidance, packet counter; every packet logs as a hunt trail. Platform-filtered to the target MAC (battery-friendly) | No |
 | **GATT Profiling** | Connect to any BLE device, walk the service/characteristic tree, flag **writable-unencrypted characteristics** (the smart-lock vuln pattern), JSON profile export | No |
 | **Web Recon** | crt.sh subdomain enum, DNS-over-HTTPS record pulls, security-header audit (CSP/HSTS/cookies/CORS), directory busting with **custom-404 fingerprinting**, reflection triage, severity + OWASP tags | No |
 | **OSINT** | Username presence across 12 platforms, HIBP breach lookup, Wayback CDX pull, GitHub secret-dork search, domain RDAP **+ IP intel (RDAP/AbuseIPDB) — domains not required** | No |
 | **Reporting** | Markdown / JSON / **PDF** (rendered on-device), session diffing ("new since last scan"), scope declaration auto-embedded, in-app viewer, save to Downloads, share sheet, per-report delete | No |
+| **Findings feed** | Every row carries a **source badge** (Bluetooth/WiFi/LAN scan/OSINT/Web recon/Traffic), collapsible radio sections, and **🛰 intel records**: recon/OSINT results group per target — one tap opens everything a target produced (TXT/A/CAA/SOA/RDAP/headers…) in one place | No |
 
 ## At a glance: the Nearby tab
 
@@ -25,9 +29,13 @@ One unified classifier buckets **every device** — BLE, WiFi APs, LAN neighbors
 - `⚠ Possible Evil Twins` — same SSID broadcast by multiple BSSIDs with differing security, WPA→open downgrade decoys, and **venue SSIDs** (Starbucks/airports/hotels…) spoofed by a lone open/unknown AP
 - `⚠ Trackers / Flipper Alerts` — AirTags/Find My, Tiles, SmartTags, Chipolos, and **Flipper Zeros** (matched by the `80:E1:26` hardware OUI, so renamed devices still classify)
 
-**Radio sections:**
+**Radio sections (collapsible):**
 - **BLUETOOTH** — Flipper Zero · Trackers · Meta/AR Glasses · Headphones/Audio · TV/Media · Wearables · HID/Input · Vehicle · Dev Boards (ESP32/nRF) · Phones/Computers · Other
 - **WI-FI** — anomalies first, then APs grouped by the same categories (TVs/Cast devices classify from their SSIDs), then LAN neighbors
+
+**Per-device copy:** every row (Nearby + Findings) has a copy button — long-press the row or tap the copy icon to put the MAC/BSSID/IP on the clipboard with a toast.
+
+**The Findings feed is organized, not a dump:** collapsible `BLUETOOTH (n)` / `WI-FI (n)` / `WIFI ANOMALIES (n)` / `LAN (n)` sections plus **🛰 intel records** — recon on `example.com` or a username matrix produces ONE record per target; open it to see every DNS record type (TXT/A/AAAA/CAA/SOA/NS/MX), RDAP hits, headers, and platform results the recon produced.
 
 ## Architecture
 
@@ -62,7 +70,8 @@ One-directional data flow — modules never touch the database:
 
 **Design choices worth stealing:**
 - **Sealed `Finding` model with JSON payloads** — the Room table never churns as subtypes evolve; the type-discriminator + payload-blob pattern means adding a module touches zero migrations.
-- **`SocketProtector` singleton** — the VpnService registers its `protect()` at startup and every module's sockets (HTTP recon, BLE listeners, sweeps) bypass the TUN instead of tunneling into the observer itself.
+- **`SocketProtector` singleton** — the VpnService registers its `protect()` at startup and every module's sockets (HTTP recon, BLE listeners, sweeps) bypass the TUN instead of tunneling into the observer itself. `WifiPinner` additionally binds every probe socket to the WiFi `Network` — with WiFi + LTE both up, default-network routing would otherwise send LAN probes into the cellular agent (RFC1918 unroutable there), silently killing port scans.
+- **Bounded UI reads + resilient writer** — the feed observes a newest-300 window (a scan burst = hundreds of inserts; re-diffing the whole session per insert stalled the tab), and the single DB writer retries failed rows instead of dying.
 - **Classification-before-render** — grouping decodes the raw field; rendering formats the row. Never conflate the two.
 - **Dark-only theme, terminal aesthetic** — near-black surfaces, one signal-yellow accent, red flagged rows, glitch-streak background on the control screen only (readability beats ambience under dense logs).
 
@@ -98,9 +107,11 @@ adb install -r app-debug.apk        # or sideload the APK
 ```
 
 1. **Start monitoring** — grants location/BLE/notification permissions, then the Android VPN consent dialog. UDP traffic (DNS, QUIC/HTTP3) now flows through the observer; TCP is **observe-only** until the userspace-stack integration (see VPN status below) — expect HTTPS to stall while the tunnel is up.
-2. Run scans from the deck: **ARP scan** (instant) · **Active sweep** (whole /24 + mDNS/SSDP) · **Full WiFi sweep** (all APs, ~10s) · **BLE device scan** (~15s) · **Web recon** / **OSINT** (target dialogs with built-in scope gates).
-3. Watch **Nearby** for the classified group view; red groups alert on top.
-4. **Reports** → open in-app / save to `Download/NetGuard/` / share / delete. The scope declaration you typed is embedded on every exported page.
+2. Run scans from the deck: **ARP scan** (instant) · **Network scan** (whole /24 + mDNS/SSDP, port probes + banner grabs + OS guessing) · **WiFi scan** (all APs + anomaly detection, ~10s) · **BLE device scan** (~15s).
+3. **OSINT** and **Web recon (bug bounty)** are one-tap dropdown sheets on the same deck — tap to expand every tool inline (username matrix, HIBP breaches, IP/domain RDAP, Wayback, GitHub dorks / crt.sh subdomains, DoH records, header audit, dir busting, reflection triage). Entering a target and running it = declaring your authorization; `.gov`/`.mil` refused.
+4. Hunting a tracker? Open the **🦊 Fox Hunt** tab, paste the MAC (long-press-copy it from any BLE finding), press Hunt, and walk — the readout goes warmer/colder with a best-signal trail.
+5. Watch **Nearby** for the classified group view; red groups alert on top.
+6. **Reports** → open in-app / save to `Download/NetGuard/` / share / delete. The scope declaration you typed is embedded on every exported page.
 
 OSINT extras live in **Settings** (gear icon): your HIBP API key and a GitHub token unlock breach lookup and code-search dorking. Keys stay in app-private prefs and never appear in exports.
 
@@ -129,18 +140,16 @@ OSINT extras live in **Settings** (gear icon): your HIBP API key and a GitHub to
 - **Findings tab: OSINT/Web results collapse into one "🛰 INTEL" dropdown group** (OSINT + WEB + ATTACKER_LOOKUP), folded by default, so DNS-record spam no longer buries device findings.
 - Six tabs now: Monitor · Nearby · Findings · 🦊 Fox Hunt · Reports · GATT.
 
-**0.8.0 — usability pass (dropdown tools, fox hunt, copy)**
+**0.8.x — usability pass (dropdown tools, fox hunt, copy)**
 - **OSINT and Web recon are now expandable dropdown sheets** on the Monitor deck, not dialogs: tap the row and every tool appears inline with its own input + Run button — no more multi-step popups. Each tool runs independently (username matrix, HIBP breaches, IP/domain RDAP, Wayback, GitHub dorks / subdomains, DNS, headers, dir busting, reflection triage); the OSINT/IP path was verified live on-device (1.1.1.1 → APNIC-LABS, AS13335).
 - **🦊 BLE Fox hunt** — proximity hunting for trackers and alert-class BLE (AirTag/Find My, Flipper OUI...): 30 s low-latency scan, every observation logged, warmer/colder readout with a log-distance range estimate. Verified live: Flipper `Cr0w` tracked at ~1.7 m.
 - **Copy MAC/BSSID/IP from Near (Nearby) or Findings**: rows show a copy button (tap) and the whole row copies on long-press, with a toast. Verified live: Flipper MAC copied and confirmed via system clipboard chip.
 - Renames: "Active sweep" → **Network scan**; "Full WiFi sweep" → **WiFi scan** (deck, quick buttons, statuses, auto-opened scope label).
 
-**0.7.1 — probes connect for real**
-- Scan sockets are pinned to the WiFi `Network` (`Network.bindSocket`): with WiFi + LTE up simultaneously, default-network routing was silently sending every LAN-bound probe into the cellular agent where RFC1918 space is unroutable — sweeps "succeeded" with zero contact. Now TCP RSTs are received from real devices (60+ hosts on the test LAN) and counted as proof of life.
-- Hosts that answer but keep all probed ports closed now appear on the map (previously hidden — which also silently corrupted AP-isolation detection).
-- Public-IP/OSINT lookups run on a dedicated dispatcher (no longer starved behind the 5,800-job probe queue) with a default-network fallback; when the router refuses new forwarded WAN TCP, the status strip says so instead of a bare "unavailable".
-
-**0.7.0 — the real network map**
+**0.7.x — probes connect for real + the network map**
+- Scan sockets pinned to the WiFi `Network` (`Network.bindSocket`): with WiFi + LTE up simultaneously, default-network routing sent LAN-bound probes into the cellular agent where RFC1918 space is unroutable — sweeps "succeeded" with zero contact. TCP RSTs now count as proof of life; RST-only hosts appear on the map.
+- Public-IP/OSINT lookups run on a dedicated dispatcher with a default-network fallback; when the router refuses new forwarded WAN TCP, the status strip says so.
+- The map: this phone + gateway highlighted, per-device open ports with service descriptions + banners, OS guesses (port patterns + banner + OUI), AP-isolation detection, public IP with RDAP org/ASN.
 
 ## VPN module status (the honest version)
 
