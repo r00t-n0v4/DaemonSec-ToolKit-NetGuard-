@@ -2,7 +2,7 @@
 
 **A pocket-sized network security toolkit — VPN-based traffic observation, WiFi/BLE airspace awareness, proximity fox-hunting, and bug-bounty recon in one offline-first Android app.**
 
-`v0.9.4` · 6 tabs · pure Android (no root, no Termux) · exports MD/JSON/PDF on-device
+`v0.9.5` · 6 tabs · pure Android (no root, no Termux) · exports MD/JSON/PDF on-device
 
 ## What it does
 
@@ -116,6 +116,13 @@ adb install -r app-debug.apk        # or sideload the APK
 OSINT extras live in **Settings** (gear icon): your HIBP API key and a GitHub token unlock breach lookup and code-search dorking. Keys stay in app-private prefs and never appear in exports.
 
 ## Changelog (recent)
+
+**0.9.5 — live traffic logs that work under the tunnel (fixed the tunnel itself)**
+- **The VPN reader finally reads more than one packet**: the tun fd netd hands out is O_NONBLOCK, and the reader treated `EAGAIN` (no packet right now) as end-of-stream and EXITED after the first packet — that was the real "the tunnel kills the internet" bug all along (DNS died one millisecond in). It now parks on EAGAIN like every VPN app does.
+- **DNS works under the tunnel again** via the UDP-NAT forwarder (OpenDNS upstream): verified `ping example.com` resolving through the tunnel.
+- **Traffic logs flow again while monitoring runs**: DNS rows carry real hostnames (api.github.com, www.wikipedia.org, api.ipify.org…), TLS/TCP rows carry destination IP + port; rows land in the Findings list live during the session.
+- **TLS SNI capture fixed**: rows emit at each flow's first DATA packet instead of the payload-less SYN (the SYN can't carry SNI — every TLS row used to be a bare IP).
+- Per-app attribution stays honest: only NetGuard's own flows get a package name (Android 10+ kernel-filters other apps' /proc/net socket rows; DNS rows attribute the querying app via the tun path when readable).
 
 **0.9.4 — Findings type-filter slider**
 - The type-filter chips (All/WEB/WIFI_AP/…/OSINT) overflowed their fixed Row and the last chips (OSINT) rendered off-screen — unreachable when several sensors ran in one session. The row is now a horizontal slider (swipe to reach every type). Verified: swipe left → OSINT chip reachable → filters to its record.

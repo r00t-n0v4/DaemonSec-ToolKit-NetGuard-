@@ -225,25 +225,45 @@ class NetGuardVpnService : VpnService() {
 
         // Reader thread: TUN -> observe + UDP NAT out
         sessionThread = Thread({
+            android.util.Log.d(TAG, "reader: start (fd=$fd)")
             val packet = ByteBuffer.allocateDirect(VPN_MTU + 64)
+            var first = true
+            var handled = 0L
             while (running) {
                 packet.clear()
                 val n = try {
                     Os.read(fd, packet)
-                } catch (_: Interruptible) {
+                } catch (e: android.system.ErrnoException) {
+                    // The tun fd is O_NONBLOCK: EAGAIN just means no packet
+                    // right now (netd opens it non-blocking) — never fatal.
+                    // (The old reader treated this as EOF and EXITED after
+                    // the first packet — the "VPN kills internet" bug.)
+                    if (e.errno == android.system.OsConstants.EAGAIN) {
+                        try { Thread.sleep(2) } catch (_: InterruptedException) { break }
+                        continue
+                    }
+                    android.util.Log.w(TAG, "reader: read err ${e.errno}")
                     break
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "reader: read err ${e.javaClass.simpleName}")
                     break
-                } finally {
-                    Unit
                 }
                 if (n <= 0) break
+                if (first) {
+                    first = false
+                    val proto = packet.get(9).toInt() and 0xFF
+                    android.util.Log.d(TAG, "reader: FIRST packet $n bytes proto=$proto")
+                }
                 try {
                     handlePacketFromDevice(packet, n)
-                } catch (_: Exception) {
+                    handled++
+                    if (handled % 50L == 0L) android.util.Log.d(TAG, "reader: handled=$handled")
+                } catch (e: Exception) {
                     // never let one malformed packet kill the tunnel
+                    android.util.Log.w(TAG, "reader: handle err ${e.javaClass.simpleName}: ${e.message?.take(80)}")
                 }
             }
+            android.util.Log.d(TAG, "reader: exit (handled=$handled)")
         }, "netguard-vpn-read")
 
         // Relay thread: upstream sockets -> replies written back into the TUN
@@ -353,10 +373,20 @@ class NetGuardVpnService : VpnService() {
     }
 
     private fun observeTcpPacket(packet: ByteBuffer, ihl: Int, length: Int, sessionId: String, srcPort: Int, dstIp: Int, dstPort: Int) {
-        // Emit once per flow, not once per packet.
+        // Emit once per flow, but at its FIRST DATA packet — the SYN
+        // (payload-less) can't carry SNI, and emitting there once per flow
+        // meant the ClientHello (a few packets later) was never read:
+        // every TLS row showed a bare IP with no hostname.
+        val dataOffset = ((packet.get(ihl + 12).toInt() shr 4) and 0xF) * 4
+        val payloadLen = length - ihl - dataOffset
+        if (payloadLen <= 0 && dstPort != 53) {
+            // pure SYN/ACK/FIN — wait for the data packet; the flow key is
+            // only added when we actually emit (below).
+            return
+        }
         val key = "$srcPort>$dstIp:$dstPort"
         if (!seenTcpFlows.add(key)) return
-        if (seenTcpFlows.size > 512) seenTcpFlows.clear() // bounded memory; sessions are short
+        if (seenTcpFlows.size > 512) seenTcpFlows.clear() // bounded memory
 
         val sni = extractTlsSni(packet, ihl, length)
         val cleartext = dstPort in CLEARTEXT_PORTS
